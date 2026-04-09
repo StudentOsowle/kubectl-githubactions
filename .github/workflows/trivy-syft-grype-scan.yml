@@ -3,6 +3,7 @@
 name: trivy/syft/grype scans
 on:
   workflow_run:
+    workflows: ["prod-container-scan"]
     types:
       - completed
     branches:
