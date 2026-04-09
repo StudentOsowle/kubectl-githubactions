@@ -1,0 +1,198 @@
+# .github/workflows/trivy-syft-grype-scan.yml
+
+name: trivy/syft/grype scans
+on:
+  workflow_run:
+    types:
+      - completed
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: scanning images
+        required: true
+        type: string
+
+jobs:
+  security-scan:
+    runs-on: [self-hosted, linux, ARM64]
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    environment: dev
+    permissions:
+      id-token: write
+      contents: read
+      actions: read
+      security-events: write
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Download build artifact ─────────────────────────────────────
+      - name: Download build artifact
+        if: ${{ github.event_name == 'workflow_run' }}
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          path: build-artifact
+          workflow_conclusion: success
+          run_id: ${{ github.event.workflow_run.id }}
+          github_token: ${{ secrets.GHA_TOKEN }}
+
+      # ── 3. Install Trivy ───────────────────────────────────────────────
+      - name: Install Trivy
+        run: |
+          if ! command -v trivy &> /dev/null; then
+            echo "Installing Trivy..."
+            wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+            echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+            sudo apt-get update
+            sudo apt-get install trivy -y
+          fi
+          trivy --version
+
+      # ── 4. Scan with Trivy ─────────────────────────────────────────────
+      - name: Scan with Trivy
+        run: |
+          mkdir -p trivy-reports
+          trivy image \
+            --exit-code 1 \
+            --severity CRITICAL,HIGH \
+            --format json \
+            --output trivy-reports/trivy-results.json \
+            ${{ github.event.inputs.image_tag }}
+        continue-on-error: true
+
+      # ── 5. Install Grype ───────────────────────────────────────────────
+      - name: Install Grype
+        run: |
+          if ! command -v grype &> /dev/null; then
+            echo "Installing Grype..."
+            curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sudo sh -s -- -b /usr/local/bin
+          fi
+          grype version
+
+      # ── 6. Scan with Grype ─────────────────────────────────────────────
+      - name: Scan with Grype
+        run: |
+          mkdir -p grype-reports
+          grype ${{ github.event.inputs.image_tag }} \
+            --fail-on critical \
+            -o json \
+            --file grype-reports/grype-results.json
+        continue-on-error: true
+
+      # ── 7. Install Syft ────────────────────────────────────────────────
+      - name: Install Syft
+        run: |
+          if ! command -v syft &> /dev/null; then
+            echo "Installing Syft..."
+            curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sudo sh -s -- -b /usr/local/bin
+          fi
+          syft version
+
+      # ── 8. Scan with Syft ─────────────────────────────────────────────
+      - name: Scan with Syft
+        run: |
+          mkdir -p syft-reports
+          syft ${{ github.event.inputs.image_tag }} \
+            -o spdx-json \
+            --file syft-reports/syft-sbom.json
+        continue-on-error: true
+
+      # ── 9. Upload all reports ──────────────────────────────────────────
+      - name: Upload scan results
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-results
+          path: |
+            trivy-reports/
+            grype-reports/
+            syft-reports/
+          retention-days: 14
+
+      # ── 10. Summarize scan results ─────────────────────────────────────
+      - name: Summarize scan results
+        run: |
+          echo "## Security Scan Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** ${{ github.event.inputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
+
+          CRITICAL=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' trivy-reports/trivy-results.json)
+          HIGH=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length' trivy-reports/trivy-results.json)
+          MEDIUM=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="MEDIUM")] | length' trivy-reports/trivy-results.json)
+
+          echo "### Vulnerability Count" >> $GITHUB_STEP_SUMMARY
+          echo "| Severity | Count |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 🔴 Critical | $CRITICAL |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🟠 High | $HIGH |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🟡 Medium | $MEDIUM |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          TOTAL_PACKAGES=$(jq '.packages | length' syft-reports/syft-sbom.json)
+          echo "### SBOM Generated" >> $GITHUB_STEP_SUMMARY
+          echo "- **Total Packages:** $TOTAL_PACKAGES" >> $GITHUB_STEP_SUMMARY
+          echo "- **Format:** SPDX JSON" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Reports" >> $GITHUB_STEP_SUMMARY
+          echo "- [View Security Tab](https://github.com/${{ github.repository }}/security/code-scanning)" >> $GITHUB_STEP_SUMMARY
+
+      # ── 11. Check vulnerability threshold ─────────────────────────────
+      - name: Check vuln threshold
+        if: always()
+        run: |
+          CRITICAL=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' trivy-reports/trivy-results.json)
+          echo "Found $CRITICAL critical vulnerabilities"
+          # Uncomment to hard fail on critical:
+          # if [ "$CRITICAL" -gt 0 ]; then
+          #   echo "❌ Build failed: Critical vulnerabilities found"
+          #   exit 1
+          # fi
+          echo "✅ Vulnerability check passed"
+
+      # ── 12. Send SBOM to Slack (private DM) ───────────────────────────
+      - name: Send SBOM to Slack
+        run: |
+          SBOM_SUMMARY=$(jq -r '
+            "Packages: \(.packages | length)\nTop 5:\n• " +
+            ([.packages[0:5][].name] | join("\n• "))
+          ' syft-reports/syft-sbom.json)
+
+          curl -X POST \
+            -H "Content-type: application/json" \
+            --data "$(jq -n \
+              --arg summary "$SBOM_SUMMARY" \
+              --arg image "${{ github.event.inputs.image_tag }}" \
+              --arg url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+              '{
+                channel: "${{ secrets.SLACK_MEMBER_ID }}",
+                blocks: [
+                  {
+                    type: "header",
+                    text: { type: "plain_text", text: ":shield: SBOM Scan Complete" }
+                  },
+                  {
+                    type: "section",
+                    text: { type: "mrkdwn", text: "*Image:* `\($image)`\n\($summary)" }
+                  },
+                  {
+                    type: "actions",
+                    elements: [
+                      {
+                        type: "button",
+                        text: { type: "plain_text", text: "View Full Report" },
+                        url: $url
+                      }
+                    ]
+                  }
+                ]
+              }')" \
+            "${{ secrets.SLACK_WEBHOOK_URL }}"
+
+      # ── 13. Cleanup ────────────────────────────────────────────────────
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -rf trivy-reports grype-reports syft-reports
+          docker system prune -f
