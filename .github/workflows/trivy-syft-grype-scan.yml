@@ -17,7 +17,7 @@ on:
 
 jobs:
   security-scan:
-    runs-on: [self-hosted, linux, x64]
+    runs-on: [self-hosted, linux, X64]
     if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
     environment: dev
     permissions:
@@ -69,13 +69,15 @@ jobs:
         run: |
           if ! command -v grype &> /dev/null; then
             echo "Installing Grype..."
-            curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sudo sh -s -- -b /usr/local/bin
+            curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b $HOME/.local/bin
           fi
+          export PATH=$HOME/.local/bin:$PATH
           grype version
 
       # ── 6. Scan with Grype ─────────────────────────────────────────────
       - name: Scan with Grype
         run: |
+          export PATH=$HOME/.local/bin:$PATH
           mkdir -p grype-reports
           grype ${{ github.event.inputs.image_tag }} \
             --fail-on critical \
@@ -167,7 +169,7 @@ jobs:
               --arg image "${{ github.event.inputs.image_tag }}" \
               --arg url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
               '{
-                channel: "${{ secrets.SLACK_MEMBER_ID }}",
+                channel: "YOUR_SLACK_MEMBER_ID",
                 blocks: [
                   {
                     type: "header",
