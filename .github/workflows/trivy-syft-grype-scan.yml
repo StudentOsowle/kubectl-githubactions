@@ -40,7 +40,12 @@ jobs:
           run_id: ${{ github.event.workflow_run.id }}
           github_token: ${{ secrets.GHA_TOKEN }}
 
-      # ── 3. Install Trivy ───────────────────────────────────────────────
+           # ── 3. Docker Hub Login ───────────────────────────────────────────
+      - name: Log in to Docker Hub
+        run: |
+          echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+      # ── 4. Install Trivy ───────────────────────────────────────────────
       - name: Install Trivy
         run: |
           if ! command -v trivy &> /dev/null; then
@@ -52,7 +57,7 @@ jobs:
           fi
           trivy --version
 
-      # ── 4. Scan with Trivy ─────────────────────────────────────────────
+      # ── 5. Scan with Trivy ─────────────────────────────────────────────
       - name: Scan with Trivy
         run: |
           mkdir -p trivy-reports
@@ -64,7 +69,7 @@ jobs:
             ${{ github.event.inputs.image_tag }}
         continue-on-error: true
 
-      # ── 5. Install Grype ───────────────────────────────────────────────
+      # ── 6. Install Grype ───────────────────────────────────────────────
       - name: Install Grype
         run: |
           if ! command -v grype &> /dev/null; then
@@ -74,7 +79,7 @@ jobs:
           export PATH=$HOME/.local/bin:$PATH
           grype version
 
-      # ── 6. Scan with Grype ─────────────────────────────────────────────
+      # ── 7. Scan with Grype ─────────────────────────────────────────────
       - name: Scan with Grype
         run: |
           export PATH=$HOME/.local/bin:$PATH
@@ -85,7 +90,7 @@ jobs:
             --file grype-reports/grype-results.json
         continue-on-error: true
 
-      # ── 7. Install Syft ────────────────────────────────────────────────
+      # ── 8. Install Syft ────────────────────────────────────────────────
       - name: Install Syft
         run: |
           if ! command -v syft &> /dev/null; then
@@ -94,7 +99,7 @@ jobs:
           fi
           syft version
 
-      # ── 8. Scan with Syft ─────────────────────────────────────────────
+      # ── 9. Scan with Syft ─────────────────────────────────────────────
       - name: Scan with Syft
         run: |
           mkdir -p syft-reports
@@ -103,7 +108,7 @@ jobs:
             --file syft-reports/syft-sbom.json
         continue-on-error: true
 
-      # ── 9. Upload all reports ──────────────────────────────────────────
+      # ── 10. Upload all reports ──────────────────────────────────────────
       - name: Upload scan results
         uses: actions/upload-artifact@v4
         with:
@@ -114,7 +119,7 @@ jobs:
             syft-reports/
           retention-days: 14
 
-      # ── 10. Summarize scan results ─────────────────────────────────────
+      # ── 11. Summarize scan results ─────────────────────────────────────
       - name: Summarize scan results
         run: |
           echo "## Security Scan Summary" >> $GITHUB_STEP_SUMMARY
@@ -141,7 +146,7 @@ jobs:
           echo "### Reports" >> $GITHUB_STEP_SUMMARY
           echo "- [View Security Tab](https://github.com/${{ github.repository }}/security/code-scanning)" >> $GITHUB_STEP_SUMMARY
 
-      # ── 11. Check vulnerability threshold ─────────────────────────────
+      # ── 12. Check vulnerability threshold ─────────────────────────────
       - name: Check vuln threshold
         if: always()
         run: |
@@ -154,7 +159,7 @@ jobs:
           # fi
           echo "✅ Vulnerability check passed"
 
-      # ── 12. Send SBOM to Slack (private DM) ───────────────────────────
+      # ── 13. Send SBOM to Slack (private DM) ───────────────────────────
       - name: Send SBOM to Slack
         run: |
           SBOM_SUMMARY=$(jq -r '
@@ -193,7 +198,7 @@ jobs:
               }')" \
             "${{ secrets.SLACK_WEBHOOK_URL }}"
 
-      # ── 13. Cleanup ────────────────────────────────────────────────────
+      # ── 14. Cleanup ────────────────────────────────────────────────────
       - name: Cleanup
         if: always()
         run: |
