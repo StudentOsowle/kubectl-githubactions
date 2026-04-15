@@ -198,6 +198,27 @@ jobs:
               }')" \
             "${{ secrets.SLACK_WEBHOOK_URL }}"
 
+
+       # ── 13.5. Send report via Resend ──────────────────────────────────
+      - name: Send scan report via Resend
+        if: always()
+        run: |
+          CRITICAL=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' trivy-reports/trivy-results.json 2>/dev/null || echo "0")
+          HIGH=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length' trivy-reports/trivy-results.json 2>/dev/null || echo "0")
+          MEDIUM=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="MEDIUM")] | length' trivy-reports/trivy-results.json 2>/dev/null || echo "0")
+          TOTAL_PACKAGES=$(jq '.packages | length' syft-reports/syft-sbom.json 2>/dev/null || echo "0")
+
+          curl -s -X POST https://api.resend.com/emails \
+            -H "Authorization: Bearer ${{ secrets.RESEND_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"from\": \"onboarding@resend.dev\",
+              \"to\": \"orionsowle@gmail.com\",
+              \"subject\": \"Security Scan Report - ${{ github.event.inputs.image_tag }}\",
+              \"html\": \"<h2>Security Scan Report</h2><p><strong>Image:</strong> ${{ github.event.inputs.image_tag }}</p><h3>Vulnerability Summary</h3><table border='1'><tr><th>Severity</th><th>Count</th></tr><tr><td>🔴 Critical</td><td>$CRITICAL</td></tr><tr><td>🟠 High</td><td>$HIGH</td></tr><tr><td>🟡 Medium</td><td>$MEDIUM</td></tr></table><h3>SBOM</h3><p>Total Packages: $TOTAL_PACKAGES</p><p><a href='${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'>View Full Report on GitHub</a></p>\"
+            }"
+
+
       # ── 14. Cleanup ────────────────────────────────────────────────────
       - name: Cleanup
         if: always()
